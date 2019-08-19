@@ -1,9 +1,12 @@
 #include <iostream>
+#include <fstream>
 #include <chrono>
+#include <set>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
+#include <opencv2/ximgproc.hpp>
 
 #include "multilayer_stixel_world.h"
 #include "semi_global_matching.h"
@@ -69,6 +72,11 @@ public:
 		param.numDisparities = numDisparities / 2;
 		param.max12Diff = -1;
 		param.medianKernelSize = -1;
+
+		param.P1 = 8 * 11 * 11;
+		param.P2 = 32 * 11 * 11;
+		param.medianKernelSize = 3;
+
 		sgm_ = cv::Ptr<SemiGlobalMatching>(new SemiGlobalMatching(param));
 	}
 
@@ -93,6 +101,50 @@ private:
 	cv::Ptr<SemiGlobalMatching> sgm_;
 };
 
+void ComputeDepth(const cv::Mat& disparity) {
+	std::vector<double> x_vec;
+	std::vector<double> y_vec;
+	std::vector<double> z_vec;
+
+	std::ofstream out_file("pointcloud.txt");
+
+	double f = 1050;
+	double x_c = 0;
+	double y_c = 0;
+	double b = 0.37;
+
+	for (int i=0; i<disparity.rows; ++i) {
+		for (int j=0; j<disparity.cols; ++j) {
+			double x=0, y=0, z=0;
+
+			if (disparity.at<float>(i, j) > 10) {
+				z = ( (f * b) / disparity.at<float>(i, j) );
+				x = ( (z * (j - x_c)) / f );
+				y = ( (z * (i - y_c)) / f );
+			}
+
+			x_vec.push_back(x);
+			y_vec.push_back(y);
+			z_vec.push_back(z);
+
+			out_file << x << "," << y << "," << z << "\n";
+		}
+	}
+
+	out_file.close();
+}
+
+struct SortStixels {
+	inline bool operator() (const Stixel& stixel1, const Stixel& stixel2) {
+		if (stixel1.u == stixel2.u) {
+			return stixel1.vB > stixel2.vB;
+		}
+		else {
+			return stixel1.u < stixel2.u;
+		}
+	}
+};
+
 int main(int argc, char* argv[])
 {
 	if (argc < 4)
@@ -102,8 +154,22 @@ int main(int argc, char* argv[])
 	}
 
 	// stereo SGBM
-	const int numDisparities = 128;
+	const int numDisparities = 256;
 	SGMWrapper sgm(numDisparities);
+
+	const int wsize = 13;
+	// const int numDisparities = 64;
+	const int P1 = 8 * wsize * wsize;
+	const int P2 = 32 * wsize * wsize;
+	cv::Ptr<cv::StereoSGBM> ssgbm = cv::StereoSGBM::create(0, numDisparities/2, wsize, P1, P2,
+		0, 0, 0, 0, 0, cv::StereoSGBM::MODE_SGBM_3WAY);
+
+	cv::Ptr<cv::ximgproc::DisparityWLSFilter> wls_filter = cv::ximgproc::createDisparityWLSFilter(ssgbm);
+	wls_filter->setLambda(1000);
+	wls_filter->setSigmaColor(1.2);
+	cv::Ptr<cv::StereoMatcher> right_matcher = cv::ximgproc::createRightMatcher(ssgbm);
+	
+	cv::Ptr<cv::StereoBM> sbm = cv::StereoBM::create(numDisparities);
 
 	// read camera parameters
 	const cv::FileStorage fs(argv[3], cv::FileStorage::READ);
@@ -119,20 +185,31 @@ int main(int argc, char* argv[])
 	param.camera.height = fs["Height"];
 	param.camera.tilt = fs["Tilt"];
 	param.dmax = numDisparities;
+	param.roadEstimation = MultiLayerStixelWorld::ROAD_ESTIMATION_CAMERA;
+	param.stixelWidth = 41;
 
-	cv::Mat disparity;
+	cv::Mat disparity, disparity_rl, filtered_disp;
 	MultiLayerStixelWorld stixelWorld(param);
+
+	cv::namedWindow("disparity", CV_WINDOW_NORMAL);
+	cv::resizeWindow("disparity", 1280, 720);
 
 	for (int frameno = 1;; frameno++)
 	{
-		cv::Mat I1 = cv::imread(cv::format(argv[1], frameno), cv::IMREAD_UNCHANGED);
-		cv::Mat I2 = cv::imread(cv::format(argv[2], frameno), cv::IMREAD_UNCHANGED);
+		cv::Mat I1_orig = cv::imread(cv::format(argv[1], frameno), 0);
+		cv::Mat I2_orig = cv::imread(cv::format(argv[2], frameno), 0);
 
-		if (I1.empty() || I2.empty())
+		if (I1_orig.empty() || I2_orig.empty())
 		{
 			std::cerr << "imread failed." << std::endl;
 			break;
 		}
+
+		cv::Rect2d ROI1(0, 0, 1920, 1100);
+		cv::Rect2d ROI2(0, 0, 1920, 1100);
+
+		cv::Mat I1 = I1_orig(ROI1);
+		cv::Mat I2 = I2_orig(ROI2);
 
 		CV_Assert(I1.size() == I2.size() && I1.type() == I2.type());
 		CV_Assert(I1.type() == CV_8U || I1.type() == CV_16U);
@@ -149,13 +226,23 @@ int main(int argc, char* argv[])
 
 		// compute dispaliry
 		sgm.compute(I1, I2, disparity);
+		// ssgbm->compute(I1, I2, disparity);
+		// right_matcher->compute(I2, I1, disparity_rl);
+		// wls_filter->filter(disparity, I1, filtered_disp, disparity_rl);
+		// filtered_disp.convertTo(filtered_disp, CV_32F, 1. / SemiGlobalMatching::DISP_SCALE);
+		// filtered_disp.copyTo(disparity);
+
+		// sbm->compute(I1, I2, disparity);
 		disparity.convertTo(disparity, CV_32F, 1. / SemiGlobalMatching::DISP_SCALE);
+
+		// ComputeDepth(disparity);
 
 		// compute stixels
 		const auto t2 = std::chrono::steady_clock::now();
 
 		std::vector<Stixel> stixels;
 		stixelWorld.compute(disparity, stixels);
+		sort(stixels.begin(), stixels.end(), SortStixels());
 
 		const auto t3 = std::chrono::steady_clock::now();
 		const auto duration12 = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
@@ -178,8 +265,46 @@ int main(int argc, char* argv[])
 		cv::cvtColor(I1, draw, cv::COLOR_GRAY2BGR);
 
 		cv::Mat stixelImg = cv::Mat::zeros(I1.size(), draw.type());
-		for (const auto& stixel : stixels)
+		std::set<float> unique_disparities;
+		for (const auto& stixel : stixels) {
 			drawStixel(stixelImg, stixel, dispToColor(stixel.disp));
+			unique_disparities.insert(stixel.disp);
+		}
+
+		int prev_x = -1;
+		int prev_y = -1;
+		int curr_x = prev_x;
+		int curr_y = prev_y;
+		for (const auto& stixel : stixels) {
+			// std::cout << stixel.u << "," << stixel.vB << " ";
+			curr_x = stixel.u;
+			curr_y = stixel.vB;
+
+			if (curr_x != prev_x) {
+				// std::cout << curr_x << ",";
+				double depth = 100;
+				if (stixel.disp > 5) {
+					depth = (1050 * 0.37) / stixel.disp;
+				}
+				cv::putText(stixelImg, 
+							std::to_string((int) depth), 
+							cv::Point(stixel.u, (stixel.vT + stixel.vT)/2), 
+							cv::FONT_HERSHEY_SIMPLEX, 1, 
+							cv::Scalar(255,255,255), 3);
+			}
+
+			prev_x = curr_x;
+			prev_y = curr_y;
+		}
+
+		// std::cout << std::endl << std::endl;
+
+		// std::cout << "Unique disparities: \n";
+		// for (const auto& disp : unique_disparities) {
+		// 	std::cout << disp << ",";
+		// }
+		// std::cout << std::endl << std::endl;
+
 		cv::addWeighted(draw, 1, stixelImg, 0.5, 0, draw);
 
 		cv::imshow("disparity", disparityColor);

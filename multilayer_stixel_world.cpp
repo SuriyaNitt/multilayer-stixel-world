@@ -34,7 +34,7 @@ static Line calcRoadModelCamera(const CameraParameters& camera)
 
 // estimate road model from v-disparity
 static Line calcRoadModelVD(const cv::Mat1f& disparity, const CameraParameters& camera,
-	int samplingStep = 2, int minDisparity = 10, int maxIterations = 32, float inlierRadius = 1, float maxCameraHeight = 5)
+	int samplingStep = 2, int minDisparity = 10, int maxIterations = 32, float inlierRadius = 0.1, float maxCameraHeight = 5)
 {
 	const int w = disparity.rows;
 	const int h = disparity.cols;
@@ -175,11 +175,15 @@ void MultiLayerStixelWorld::compute(const cv::Mat& disparity, std::vector<Stixel
 	Line line;
 	if (param_.roadEstimation == ROAD_ESTIMATION_AUTO)
 	{
+		std::cout << "Road estimation model is auto\n";
 		line = calcRoadModelVD(columns, camera);
 
 		// when AUTO mode, update camera tilt and height
 		camera.tilt = atanf((line.a * camera.v0 + line.b) / (camera.fu * line.a));
 		camera.height = camera.baseline * cosf(camera.tilt) / line.a;
+
+		std::cout << "Camera tilt: " << camera.tilt << std::endl;
+		std::cout << "Camera Height: " << camera.height << std::endl;
 	}
 	else if (param_.roadEstimation == ROAD_ESTIMATION_CAMERA)
 	{
@@ -189,6 +193,13 @@ void MultiLayerStixelWorld::compute(const cv::Mat& disparity, std::vector<Stixel
 	{
 		CV_Error(cv::Error::StsInternal, "No such mode");
 	}
+
+	cv::Mat line_img = cv::Mat::zeros(cv::Size(disparity.cols, disparity.rows), CV_8UC3);
+	cv::Point point1(0, -line.b / line.a);
+	cv::Point point2(disparity.rows, (disparity.rows - line.b) / line.a );
+	cv::line(line_img, point1, point2, cv::Scalar(0,0,255), 3);
+	cv::imshow("Line Img", line_img);
+	cv::waitKey(1);
 
 	// compute expected ground disparity
 	std::vector<float> groundDisparity(h);
