@@ -205,14 +205,20 @@ int main(int argc, char* argv[])
 			break;
 		}
 
-		cv::Rect2d ROI1(0, 0, 1920, 1100);
-		cv::Rect2d ROI2(0, 0, 1920, 1100);
+		cv::Rect2d ROI1(0, 0, 1920, 1000);
+		cv::Rect2d ROI2(0, 0, 1920, 1000);
 
 		cv::Mat I1 = I1_orig(ROI1);
 		cv::Mat I2 = I2_orig(ROI2);
 
-		CV_Assert(I1.size() == I2.size() && I1.type() == I2.type());
-		CV_Assert(I1.type() == CV_8U || I1.type() == CV_16U);
+		// cv::Mat I1 = I1_orig;
+		// cv::Mat I2 = I2_orig;
+
+		// cv::pyrDown(I1, I1, cv::Size(I1.cols/2, I1.rows/2));
+		// cv::pyrDown(I2, I2, cv::Size(I2.cols/2, I2.rows/2));
+
+		// CV_Assert(I1.size() == I2.size() && I1.type() == I2.type());
+		// CV_Assert(I1.type() == CV_8U || I1.type() == CV_16U);
 
 		if (I1.type() == CV_16U)
 		{
@@ -285,12 +291,18 @@ int main(int argc, char* argv[])
 				double depth = 100;
 				if (stixel.disp > 5) {
 					depth = (1050 * 0.37) / stixel.disp;
+					// depth = (707 * 0.54) / stixel.disp;
 				}
+				// cv::putText(stixelImg,
+				// 			std::to_string((int) depth),
+				// 			cv::Point(stixel.u, (stixel.vT + stixel.vT)/2),
+				// 			cv::FONT_HERSHEY_SIMPLEX, 1,
+				// 			cv::Scalar(255,255,255), 3);
 				cv::putText(stixelImg, 
 							std::to_string((int) depth), 
 							cv::Point(stixel.u, (stixel.vT + stixel.vT)/2), 
 							cv::FONT_HERSHEY_SIMPLEX, 1, 
-							cv::Scalar(255,255,255), 3);
+							cv::Scalar(0,0,0), 3);
 			}
 
 			prev_x = curr_x;
@@ -310,7 +322,7 @@ int main(int argc, char* argv[])
 		cv::imshow("disparity", disparityColor);
 		cv::imshow("stixels", draw);
 
-		const char c = cv::waitKey(1);
+		const char c = cv::waitKey(2000);
 		if (c == 27)
 			break;
 		if (c == 'p')
